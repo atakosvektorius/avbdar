@@ -1,0 +1,25 @@
+{
+  // LOCAL DEMO ONLY: `npx wrangler dev` from the repo root, then open http://localhost:8787/
+  // For production use worker/wrangler.jsonc.example (zone route on your own host).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "avbdar-analytics-dev",
+  "main": "worker/worker_analytics.js",
+  "compatibility_date": "2026-08-15",
+  "workers_dev": false,
+
+  // Serves public/ (demo page + /avbdar/ client files). Must not contain the repo root:
+  // wrangler writes .wrangler/ next to this file, and watching it would cause an endless reload loop.
+  "assets": {
+    "directory": "./public",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "vars": {
+    "DOMAIN": "localhost:8787",
+    "ALLOWED_ORIGINS": "http://localhost:8787,http://127.0.0.1:8787",
+    "GA_MEASUREMENT_ID": "G-XXXXXXXXXX",
+    "GA_DEBUG": "true"
+  }
+  // Optional: put GA_API_SECRET (and your real GA_MEASUREMENT_ID) into .dev.vars (see .dev.vars.example)
+  // to forward events to GA4's debug endpoint.
+}

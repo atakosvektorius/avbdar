@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>avbdar demo — Atakos vektorius</title>
+    <link rel="icon" href="/logo.png" type="image/png">
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0
+        }
+
+        :root {
+            --bg: #FAFAFA;
+            --bg-warm: #FFF8F0;
+            --card-bg: #FFFFFF;
+            --text: #111111;
+            --text-muted: #555555;
+            --accent: #FF3B30;
+            --accent-hover: #E0342B;
+            --accent-light: #FFF0EF;
+            --green: #34C759;
+            --green-light: #E8F9ED;
+            --border: #111111;
+            --border-light: #E5E5E5;
+            --shadow: #111111;
+            --grid-color: rgba(0, 0, 0, 0.04);
+            --radius: 12px
+        }
+
+        /* CookieConsent banner in the same palette (html:root beats the lazily loaded :root in cookieconsent.css) */
+        html:root {
+            --cc-text: #111111;
+            --cc-btn-primary-bg: #FF3B30;
+            --cc-btn-primary-text: #FFFFFF;
+            --cc-btn-primary-hover-bg: #E0342B;
+            --cc-btn-secondary-bg: #FFF8F0;
+            --cc-btn-secondary-text: #111111;
+            --cc-btn-secondary-hover-bg: #FFF0EF;
+            --cc-toggle-bg-on: #FF3B30;
+            --cc-cookie-category-block-bg: #FFF8F0;
+            --cc-cookie-category-block-bg-hover: #FFF0EF;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: var(--text);
+            background-color: var(--bg);
+            background-image: linear-gradient(var(--grid-color) 1px, transparent 1px), linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+            background-size: 40px 40px;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased
+        }
+
+        nav {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(250, 250, 250, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 2px solid var(--border)
+        }
+
+        .nav-inner {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px
+        }
+
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 800;
+            font-size: 1.25rem;
+            color: var(--text);
+            text-decoration: none;
+            letter-spacing: -0.02em
+        }
+
+        .nav-logo img {
+            height: 32px;
+            width: auto
+        }
+
+        .nav-logo span {
+            color: var(--accent)
+        }
+
+        .tag {
+            font-size: 0.8rem;
+            font-weight: 700;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            padding: 2px 10px;
+            background: var(--bg-warm)
+        }
+
+        main {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 48px 16px 64px
+        }
+
+        h1 {
+            font-size: clamp(1.8rem, 5vw, 2.6rem);
+            font-weight: 900;
+            letter-spacing: -0.03em;
+            line-height: 1.15;
+            margin-bottom: 16px
+        }
+
+        h1 span {
+            color: var(--accent)
+        }
+
+        .lead {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            margin-bottom: 32px
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 3px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 6px 6px 0 var(--shadow);
+            padding: 24px;
+            margin-bottom: 32px
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            font-weight: 600
+        }
+
+        .badge {
+            font-size: 0.85rem;
+            font-weight: 700;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            padding: 2px 10px;
+            background: var(--accent-light)
+        }
+
+        .badge.ok {
+            background: var(--green-light)
+        }
+
+        .actions {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-family: inherit;
+            font-weight: 600;
+            font-size: 1rem;
+            padding: 12px 22px;
+            border-radius: 10px;
+            border: 3px solid var(--border);
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            box-shadow: 4px 4px 0 var(--shadow)
+        }
+
+        .btn:hover {
+            transform: translate(-2px, -2px);
+            box-shadow: 6px 6px 0 var(--shadow)
+        }
+
+        .btn:active {
+            transform: translate(2px, 2px);
+            box-shadow: 2px 2px 0 var(--shadow)
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #fff
+        }
+
+        .btn-secondary {
+            background: var(--card-bg);
+            color: var(--text)
+        }
+
+        #log {
+            margin-top: 16px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            min-height: 1.5em
+        }
+
+        #log:empty {
+            display: none
+        }
+
+        h2 {
+            font-size: 1.3rem;
+            font-weight: 800;
+            margin-bottom: 12px
+        }
+
+        ol {
+            padding-left: 22px;
+            color: var(--text-muted)
+        }
+
+        ol li {
+            margin-bottom: 8px
+        }
+
+        code {
+            background: var(--bg-warm);
+            border: 1px solid var(--border-light);
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-size: 0.9em;
+            color: var(--text)
+        }
+
+        footer {
+            border-top: 2px solid var(--border);
+            padding: 24px 16px;
+            text-align: center;
+            font-size: 0.9rem;
+            color: var(--text-muted)
+        }
+
+        footer a {
+            color: var(--accent);
+            font-weight: 600;
+            text-decoration: none
+        }
+
+        @media (max-width: 480px) {
+            .btn {
+                width: 100%;
+                justify-content: center
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <nav>
+        <div class="nav-inner">
+            <a href="https://atakosvektorius.lt/" class="nav-logo"><img src="/logo.png" alt="Atakos vektorius logo"
+                    width="32" height="32">atakos<span>vektorius</span></a>
+            <span class="tag">avbdar demo</span>
+        </div>
+    </nav>
+
+    <main>
+        <h1>Server-side analytics, <span>no Google scripts</span> in the browser</h1>
+        <p class="lead">This page loads no third-party code. After consent, events go to <code>/api/metrics</code> on
+            the same host, and the Worker sets an HttpOnly first-party cookie that Safari ITP does not cap at 7 days.
+        </p>
+
+        <div class="card">
+            <div class="status">
+                Analytics consent: <span id="status" class="badge">unknown</span>
+            </div>
+            <div class="actions">
+                <button type="button" class="btn btn-primary" data-cc="c-settings">Cookie settings</button>
+                <button type="button" class="btn btn-secondary" id="lead">Send generate_lead</button>
+                <button type="button" class="btn btn-secondary" id="forget">Forget me</button>
+            </div>
+            <p id="log" aria-live="polite"></p>
+        </div>
+
+        <h2>How to verify</h2>
+        <ol>
+            <li>Open DevTools &rarr; <strong>Network</strong> and accept analytics in the banner.</li>
+            <li>You should see <code>POST /api/metrics</code> with <code>Set-Cookie: __av_cid=…; HttpOnly</code> in
+                the response, and no requests to <code>google*</code> domains.</li>
+            <li>Without consent the endpoint returns <code>204</code> without <code>Set-Cookie</code>.</li>
+            <li>With <code>GA_DEBUG=true</code> the terminal running <code>wrangler dev</code> shows GA4 validation
+                messages.</li>
+        </ol>
+    </main>
+
+    <footer>
+        avbdar &middot; MIT &middot; by <a href="https://atakosvektorius.lt/">Atakos vektorius</a>
+    </footer>
+
+    <script>
+        function refreshStatus() {
+            var el = document.getElementById('status');
+            var ok = window.avAnalytics && window.avAnalytics.hasAnalyticsConsent();
+            el.textContent = ok ? 'granted' : 'not granted';
+            el.className = ok ? 'badge ok' : 'badge';
+        }
+        function log(text) {
+            document.getElementById('log').textContent = text;
+        }
+        document.getElementById('lead').addEventListener('click', function () {
+            if (!avAnalytics.hasAnalyticsConsent()) return log('No consent: nothing was sent.');
+            avAnalytics.trackEvent('generate_lead', { form: 'demo' }).then(function () {
+                log('generate_lead sent to /api/metrics.');
+            });
+        });
+        document.getElementById('forget').addEventListener('click', function () {
+            avAnalytics.forget().then(function () {
+                log('__av_cid and __av_sid cleared by the server.');
+                refreshStatus();
+            });
+        });
+        window.addEventListener('load', refreshStatus);
+        setInterval(refreshStatus, 1000);
+    </script>
+
+    <script defer src="/avbdar/analytics.js"></script>
+    <script defer src="/avbdar/cookieconsent-loader.js"></script>
+</body>
+
+</html>

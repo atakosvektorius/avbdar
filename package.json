@@ -1,0 +1,26 @@
+{
+  "name": "avbdar",
+  "version": "1.0.0",
+  "description": "GDPR-friendly server-side GA4 analytics on Cloudflare Workers: no Google scripts in the browser, HttpOnly first-party cookie that survives Safari ITP.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/worker.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "cd worker && npx wrangler deploy"
+  },
+  "keywords": [
+    "google-analytics",
+    "ga4",
+    "measurement-protocol",
+    "cloudflare-workers",
+    "server-side-tracking",
+    "gdpr",
+    "safari-itp",
+    "cookieconsent"
+  ]
+}

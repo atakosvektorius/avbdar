@@ -1,0 +1,29 @@
+{
+  // Copy to wrangler.jsonc and replace example.com / G-XXXXXXXXXX.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "avbdar-analytics",
+  "main": "worker_analytics.js",
+  "compatibility_date": "2026-08-15",
+
+  // IMPORTANT: a zone route on the SAME host as the website (not *.workers.dev, not a subdomain).
+  // Only then Set-Cookie comes from the site's own IP and Safari ITP does not cap it at 7 days.
+  // A more specific route (/api/metrics*) wins over an existing /api/* route of another Worker.
+  "routes": [
+    { "pattern": "example.com/api/metrics*", "zone_name": "example.com" }
+  ],
+  "workers_dev": false,
+
+  "vars": {
+    "DOMAIN": "example.com",
+    "GA_MEASUREMENT_ID": "G-XXXXXXXXXX"
+    // Optional:
+    // "ALLOWED_EVENTS": "page_view,generate_lead,click_cta,file_download",
+    // "METRICS_PATH": "/api/metrics",
+    // "CONSENT_COOKIE": "cc_cookie",
+    // "CONSENT_CATEGORY": "analytics",
+    // "CLIENT_COOKIE": "__av_cid",
+    // "SESSION_COOKIE": "__av_sid",
+    // "SESSION_TIMEOUT": "1800"
+  }
+  // Secret (never in vars): npx wrangler secret put GA_API_SECRET
+}
