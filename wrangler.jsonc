@@ -20,6 +20,6 @@
     "GA_MEASUREMENT_ID": "G-XXXXXXXXXX",
     "GA_DEBUG": "true"
   }
-  // Optional: put GA_API_SECRET (and your real GA_MEASUREMENT_ID) into .dev.vars (see .dev.vars.example)
-  // to forward events to GA4's debug endpoint.
+  // Optional: put your real GA_MEASUREMENT_ID into .dev.vars (see .dev.vars.example)
+  // to see the hits in GA4 DebugView.
 }

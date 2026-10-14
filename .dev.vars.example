@@ -1,5 +1,4 @@
 # Copy to .dev.vars (repo root) for `npx wrangler dev`. Never commit .dev.vars.
-# GA4 Admin -> Data streams -> Web -> Measurement Protocol API secrets
-GA_API_SECRET=your_measurement_protocol_api_secret
-# Set GA_MEASUREMENT_ID here too to override the placeholder in wrangler.jsonc
+# Your real measurement ID (GA4 Admin -> Data streams) overrides the placeholder in wrangler.jsonc;
+# with GA_DEBUG=true the hits show up in GA4 Admin -> DebugView. No API secret is needed.
 # GA_MEASUREMENT_ID=G-XXXXXXXXXX

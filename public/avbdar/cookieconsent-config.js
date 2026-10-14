@@ -89,7 +89,7 @@
                         title: 'Cookie usage',
                         description: 'This site uses server-side Google Analytics. Page views (page, title, referrer) are sent to our ' +
                             'server on Cloudflare, which forwards them to Google Analytics 4 without your IP address ' +
-                            '(only an approximate location: country, region, city). Nothing is collected without your consent.'
+                            '(your location is not determined). Nothing is collected without your consent.'
                     }, {
                         title: 'Strictly necessary cookies',
                         description: 'cc_cookie stores your consent choice so the banner is not shown again.',
@@ -133,7 +133,7 @@
                         title: 'Slapukų naudojimas',
                         description: 'Svetainė naudoja serverinę „Google Analytics“. Puslapių peržiūros (puslapis, pavadinimas, iš kur atvykote) ' +
                             'siunčiamos į mūsų serverį „Cloudflare“, kuris jas perduoda „Google Analytics 4“ be Jūsų IP adreso ' +
-                            '(tik apytikslė vieta: šalis, regionas, miestas). Be sutikimo niekas nerenkama.'
+                            '(Jūsų buvimo vieta nenustatoma). Be sutikimo niekas nerenkama.'
                     }, {
                         title: 'Būtini slapukai',
                         description: 'cc_cookie išsaugo Jūsų sutikimo pasirinkimą, kad pranešimas nebūtų rodomas pakartotinai.',

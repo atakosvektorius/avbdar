@@ -12,9 +12,9 @@ analytics.js ── POST /api/metrics ──► Worker
  (no gtag.js)                          ├─ consent cookie has "analytics"? no ─► 204, nothing stored or sent
                                        ├─ Set-Cookie: __av_cid (400 d, HttpOnly)
                                        ├─ Set-Cookie: __av_sid (30 min, HttpOnly)
-                                       └─ waitUntil(fetch) ─────────────────────► GA4 Measurement Protocol
-                                                                                 (ip_override 0.0.0.0,
-                                                                                  user_location from cf)
+                                       └─ waitUntil(fetch) ─────────────────────► GA4 /g/collect
+                                                                                 (same endpoint as gtag.js,
+                                                                                  _uip 0.0.0.0)
 ```
 
 ## Why
@@ -31,10 +31,14 @@ analytics.js ── POST /api/metrics ──► Worker
 - Consent is verified **server-side** from the CookieConsent cookie (`cc_cookie`). A client-sent `consent: true` is ignored.
   Without consent the Worker sets no cookie, sends nothing and returns `204`.
 - `POST /api/metrics/forget` clears the HttpOnly cookies when consent is withdrawn. JavaScript cannot delete them.
-- Sessions: `session_id` (from `__av_sid`, 30 min sliding window) and `engagement_time_msec` are sent with every event, so GA4 shows sessions and active users.
-- Privacy: `ip_override: "0.0.0.0"`. Approximate `user_location` (country / region / city) comes from Cloudflare `request.cf`, and `device` (category, OS, browser, language) from request headers.
+- **Standard GA4 reports**, not Measurement Protocol: hits go to the same `/g/collect` endpoint `gtag.js` uses, so GA4 attributes sessions (source / medium / campaign from the referrer and UTM tags instead of "Unassigned") and counts new users, landing pages and engaged sessions.
+  The Worker keeps the state `gtag.js` would keep in `_ga` / `_ga_*` in its HttpOnly cookies and sets the `first_visit` / `session_start` flags itself.
+- Engagement like `gtag.js`: the client measures time only while the page is visible and sends `user_engagement` when the page is hidden or left.
+  A session is engaged after 10 seconds, 2 page views or a key event (`KEY_EVENTS`).
+- Privacy: the visitor's IP is not forwarded (`_uip=0.0.0.0`, so GA4 shows no location). `IP_MODE=truncated` forwards an IP with the last IPv4 octet / IPv6 bits after /48 zeroed, which keeps country and city.
+  GA4 gets the `User-Agent` header (device, OS, browser), `Accept-Language` and the screen size.
 - Input hardening:
-  - only allowed events (`ALLOWED_EVENTS`), with Measurement Protocol reserved names always dropped;
+  - only allowed events (`ALLOWED_EVENTS`); `session_start` and `first_visit` are always dropped, because GA4 derives them;
   - flat params only, at most 15 keys, values up to 100 characters;
   - `page_location` must be on your domain;
   - `Origin` / `Referer` check;
@@ -62,15 +66,14 @@ analytics.js ── POST /api/metrics ──► Worker
 
 ### 1. GA4
 
-In GA4 go to **Admin → Data streams → (web stream) → Measurement Protocol API secrets → Create**.
-Note the measurement ID (`G-…`) and the secret.
+Note the measurement ID (`G-…`) of your web stream (**Admin → Data streams**). No API secret is needed.
+To count leads, mark `generate_lead` as a key event (**Admin → Key events → New key event**) and register the parameters you send (for example `form`) as event-scoped custom dimensions.
 
 ### 2. Worker
 
 ```sh
 cd worker
 cp wrangler.jsonc.example wrangler.jsonc   # set DOMAIN, GA_MEASUREMENT_ID and the route
-npx wrangler secret put GA_API_SECRET
 npx wrangler deploy
 ```
 
@@ -95,15 +98,16 @@ Custom events:
 avAnalytics.trackEvent('generate_lead', { form: 'contact' });
 ```
 
-The event name must be listed in the Worker's `ALLOWED_EVENTS`.
+The event name must be listed in the Worker's `ALLOWED_EVENTS`. `user_engagement` is always allowed.
 
 ### 4. Verify
 
 - Locally: run `npx wrangler dev` from the repo root and open `http://localhost:8787/`.
-  `GA_DEBUG` is already `true` in the demo config. With `GA_API_SECRET` in `.dev.vars` (copy `.dev.vars.example`), hits go to `/debug/mp/collect` and GA4's validation messages appear in the terminal.
+  `GA_DEBUG` is already `true` in the demo config. Put your real `GA_MEASUREMENT_ID` in `.dev.vars` (copy `.dev.vars.example`) and the hits appear in GA4 **Admin → DebugView**; the terminal logs GA's response status.
   Use Chrome or Firefox for this; older Safari versions reject `Secure` cookies on `http://localhost`.
 - In the browser DevTools Network tab you should see only `/api/metrics`, with `Set-Cookie: __av_cid` in the response, and no requests to `google*` domains.
 - Without consent, `/api/metrics` must not return `Set-Cookie`, and nothing should appear in GA4 Realtime.
+- With consent, GA4 Realtime should show the session's source (for example `google / organic` or your UTM tags), not "Unassigned".
 - Long-term check in Safari: note the value of `__av_cid` and come back after 8 or more days. The value must be the same.
   Do not rely on the "Expires" column in Web Inspector, because ITP applies its cap separately.
 
@@ -115,15 +119,16 @@ The event name must be listed in the Worker's `ALLOWED_EVENTS`.
 |---|---|---|
 | `DOMAIN` | — | **Required.** Allowed origin is `https://DOMAIN`. |
 | `GA_MEASUREMENT_ID` | — | **Required.** `G-XXXXXXXXXX` |
-| `GA_API_SECRET` | — | **Required, as a secret.** Without it the Worker still answers `204` but forwards nothing. |
-| `GA_DEBUG` | `false` | `"true"` sends to the validation endpoint and logs the response. |
+| `GA_DEBUG` | `false` | `"true"` marks hits for GA4 DebugView and logs GA's response status. |
+| `IP_MODE` | `none` | `none`: GA4 gets `0.0.0.0` (no location). `truncated`: IPv4 /24, IPv6 /48 (country and city kept). |
 | `ALLOWED_ORIGINS` | — | Extra origins, comma-separated (local dev). |
-| `ALLOWED_EVENTS` | `page_view,generate_lead,click_cta,file_download` | Event allowlist. |
+| `ALLOWED_EVENTS` | `page_view,generate_lead,click_cta,file_download` | Event allowlist. `user_engagement` is always allowed. |
+| `KEY_EVENTS` | `generate_lead` | Events that mark the session engaged. Also mark them as key events in GA4. |
 | `METRICS_PATH` | `/api/metrics` | Base path. `/forget` is appended. |
 | `CONSENT_COOKIE` | `cc_cookie` | Consent cookie name (CookieConsent v2 `level`, v3 `categories`). |
 | `CONSENT_CATEGORY` | `analytics` | Category that must be granted. |
-| `CLIENT_COOKIE` | `__av_cid` | Client ID cookie (400 days). |
-| `SESSION_COOKIE` | `__av_sid` | Session cookie. |
+| `CLIENT_COOKIE` | `__av_cid` | Client ID and session count (400 days). |
+| `SESSION_COOKIE` | `__av_sid` | Session ID, page views, engagement time and the engaged flag. |
 | `SESSION_TIMEOUT` | `1800` | Session inactivity timeout in seconds. |
 
 ### Client (`<script>` data attributes on `analytics.js`)
@@ -143,7 +148,8 @@ In `cookieconsent-config.js`, set `PRIVACY_URL` and adapt the texts. The languag
 ## Notes and limitations
 
 - **Consent is still required.** Server-side collection does not remove the need for prior consent under the GDPR / ePrivacy rules (in Lithuania, Article 61 of the Law on Electronic Communications). Update your privacy policy: name the `__av_cid` and `__av_sid` cookies and describe the server-side transfer to Google.
-- Measurement Protocol does not create sessions on its own, and `session_start` is reserved, so it is never sent. GA4 derives sessions from `session_id`.
+- `/g/collect` is the endpoint `gtag.js`, server-side GTM and Cloudflare Zaraz use, but Google does not document it. avbdar 1.x used the documented Measurement Protocol instead, which is meant to supplement `gtag.js`: without it every session lands in "Unassigned" and new users, landing pages and engaged sessions stay empty.
+- Cookies written by avbdar 1.x (bare client and session IDs) are read and continued, so upgrading does not reset visitors.
 - No automatic enhanced measurement (scrolls, outbound clicks, file downloads). Send those events yourself with `trackEvent`.
 - Bots that execute JavaScript and accept consent can still reach the endpoint. Add a rate-limiting rule for `/api/metrics` in Cloudflare WAF.
   If your WAF challenges some countries or ASNs, exempt `/api/metrics`, because a background `fetch` cannot solve a challenge.

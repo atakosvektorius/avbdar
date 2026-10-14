@@ -6,7 +6,7 @@
  *
  * Routes (default base path /api/metrics):
  * - POST /api/metrics        consent check via the consent cookie, HttpOnly client/session cookies,
- *                            forward the event to GA4 Measurement Protocol
+ *                            forward the event to GA4 (/g/collect)
  * - POST /api/metrics/forget clear the client/session cookies on consent withdrawal
  *
  * No Google script runs in the browser. The visitor ID lives in an HttpOnly cookie set by this
@@ -14,13 +14,25 @@
  * Deploy it on a zone route of the SAME host as the site (e.g. example.com/api/metrics*),
  * not on *.workers.dev or another subdomain.
  *
- * Env (vars / secrets):
+ * Hits go to the same /g/collect endpoint gtag.js uses (as Cloudflare Zaraz and server-side GTM do),
+ * not to the Measurement Protocol: GA4 derives session source / medium, first_visit, session_start,
+ * landing page and engaged sessions only from these hits, so MP-only traffic lands in "Unassigned".
+ * The endpoint is undocumented; parameters follow gtag.js and Zaraz's open-source GA4 component.
+ *
+ * Cookie values:
+ * - client cookie   <client uuid>.<session count>
+ * - session cookie  <session id (start, unix s)>.<page views>.<engagement ms>.<engaged 0|1>
+ *
+ * Env (vars):
  * - DOMAIN             required, e.g. example.com (allowed Origin: https://DOMAIN)
  * - GA_MEASUREMENT_ID  required, e.g. G-XXXXXXXXXX
- * - GA_API_SECRET      required, Measurement Protocol API secret (Worker secret, never in vars)
- * - GA_DEBUG           "true" -> send to /debug/mp/collect and log validation messages
+ * - GA_DEBUG           "true" -> hits show up in GA4 DebugView, GA response status is logged
+ * - IP_MODE            "none" (default): GA4 gets 0.0.0.0, no geolocation
+ *                      "truncated": last IPv4 octet / IPv6 bits after /48 zeroed, country / city kept
  * - ALLOWED_ORIGINS    comma-separated extra origins (local dev: http://localhost:8787)
- * - ALLOWED_EVENTS     comma-separated event allowlist (default: page_view,generate_lead,click_cta,file_download)
+ * - ALLOWED_EVENTS     comma-separated event allowlist (default: page_view,generate_lead,click_cta,file_download);
+ *                      user_engagement (sent by the client on page hide) is always allowed
+ * - KEY_EVENTS         comma-separated events that mark the session engaged (default: generate_lead)
  * - METRICS_PATH       base path (default: /api/metrics)
  * - CONSENT_COOKIE     consent cookie name (default: cc_cookie, CookieConsent v2)
  * - CONSENT_CATEGORY   consent category required (default: analytics)
@@ -37,7 +49,10 @@ const DEFAULTS = {
   SESSION_COOKIE: "__av_sid",
   SESSION_TIMEOUT: 1800,
   ALLOWED_EVENTS: "page_view,generate_lead,click_cta,file_download",
+  KEY_EVENTS: "generate_lead",
 };
+
+const GA_ENDPOINT = "https://www.google-analytics.com/g/collect";
 
 const CID_MAX_AGE = 34560000; // 400 days, browser maximum
 const COOKIE_ATTRS = "Path=/; Secure; SameSite=Lax; HttpOnly";
@@ -48,33 +63,33 @@ const MAX_PARAM_VALUE = 100;
 const MAX_URL_LENGTH = 1000;
 const MAX_TITLE_LENGTH = 300;
 const MAX_ENGAGEMENT_MSEC = 30 * 60 * 1000;
+const MAX_HIT_SEQUENCE = 1000;
+const MAX_PAGE_VIEWS = 9999;
 
-// Reserved in Measurement Protocol, never forwarded even if listed in ALLOWED_EVENTS.
-const RESERVED_EVENTS = new Set([
-  "ad_activeview", "ad_click", "ad_exposure", "ad_impression", "ad_query", "ad_reward",
-  "adunit_exposure", "app_clear_data", "app_exception", "app_install", "app_remove",
-  "app_store_refund", "app_update", "app_upgrade", "dynamic_link_app_open",
-  "dynamic_link_app_update", "dynamic_link_first_open", "error", "firebase_campaign",
-  "first_open", "first_visit", "in_app_purchase", "notification_dismiss",
-  "notification_foreground", "notification_open", "notification_receive",
-  "notification_send", "os_update", "screen_view", "session_start", "user_engagement",
-]);
+// GA4 engaged session: 10 s of engagement, 2+ page views or a key event.
+const ENGAGED_MSEC = 10000;
+
+// Derived by GA4 from the _ss / _fv flags; never accepted from the client even if listed in ALLOWED_EVENTS.
+const DERIVED_EVENTS = new Set(["session_start", "first_visit"]);
 
 const EVENT_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,39}$/;
 const PARAM_KEY_RE = /^[a-z_][a-z0-9_]{0,39}$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const CID_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.(\d{1,6}))?$/;
+const SID_RE = /^(\d{10})(?:\.(\d{1,4})\.(\d{1,7})\.([01]))?$/;
+const SCREEN_RE = /^\d{2,5}x\d{2,5}$/;
 
-// Cloudflare continent codes -> UN M49 codes expected by GA4 user_location.continent_id
-const CONTINENT_M49 = { AF: "002", AN: "010", AS: "142", EU: "150", NA: "019", SA: "019", OC: "009" };
+function eventList(value) {
+  return value
+    .split(",")
+    .map((e) => e.trim())
+    .filter((e) => EVENT_NAME_RE.test(e) && !DERIVED_EVENTS.has(e));
+}
 
 /**
  * Resolves configuration from env with defaults.
  */
 export function getConfig(env) {
-  const events = (env.ALLOWED_EVENTS || DEFAULTS.ALLOWED_EVENTS)
-    .split(",")
-    .map((e) => e.trim())
-    .filter((e) => EVENT_NAME_RE.test(e) && !RESERVED_EVENTS.has(e));
+  const events = eventList(env.ALLOWED_EVENTS || DEFAULTS.ALLOWED_EVENTS);
   const timeout = Number(env.SESSION_TIMEOUT);
 
   return {
@@ -84,7 +99,9 @@ export function getConfig(env) {
     clientCookie: env.CLIENT_COOKIE || DEFAULTS.CLIENT_COOKIE,
     sessionCookie: env.SESSION_COOKIE || DEFAULTS.SESSION_COOKIE,
     sessionTimeout: Number.isFinite(timeout) && timeout > 0 ? Math.round(timeout) : DEFAULTS.SESSION_TIMEOUT,
-    allowedEvents: new Set(events),
+    allowedEvents: new Set([...events, "user_engagement"]),
+    keyEvents: new Set(eventList(env.KEY_EVENTS ?? DEFAULTS.KEY_EVENTS)),
+    truncateIp: env.IP_MODE === "truncated",
   };
 }
 
@@ -217,94 +234,77 @@ export function sanitizeParams(params) {
 }
 
 /**
- * Builds GA4 user_location from Cloudflare geo data (MP requests come from Cloudflare IPs).
+ * Integer in [min, max], or `fallback` when the value is missing or not a finite number.
  */
-export function userLocation(cf) {
-  if (!cf || !cf.country || cf.country === "XX" || cf.country === "T1") return undefined;
-  const location = { country_id: cf.country };
-  if (cf.regionCode) location.region_id = `${cf.country}-${cf.regionCode}`;
-  if (cf.city) location.city = cf.city;
-  if (CONTINENT_M49[cf.continent]) location.continent_id = CONTINENT_M49[cf.continent];
-  return location;
+function clampInt(value, min, max, fallback) {
+  const number = Number(value);
+  if (value === undefined || value === null || !Number.isFinite(number)) return fallback;
+  return Math.min(Math.max(Math.round(number), min), max);
 }
 
 /**
- * Minimal User-Agent parse for GA4 device fields.
+ * Client cookie -> { id, sessionCount } or null. Cookies from avbdar 1.x hold only the uuid.
  */
-export function deviceInfo(userAgent, acceptLanguage) {
-  const ua = userAgent || "";
-  const device = {};
+export function parseClient(value) {
+  const match = value && CID_RE.exec(value);
+  if (!match) return null;
+  return { id: match[1], sessionCount: Number(match[2] || 0) };
+}
 
-  if (/iPad|Tablet|Android(?!.*Mobile)/i.test(ua)) device.category = "tablet";
-  else if (/Mobi|iPhone|iPod|Android/i.test(ua)) device.category = "mobile";
-  else device.category = "desktop";
+/**
+ * Session cookie -> session state or null. Cookies from avbdar 1.x hold only the session id,
+ * set by a page_view, so they count as one page view.
+ */
+export function parseSession(value) {
+  const match = value && SID_RE.exec(value);
+  if (!match) return null;
+  if (match[2] === undefined) return { id: match[1], pageViews: 1, engagementMsec: 0, engaged: false };
+  return {
+    id: match[1],
+    pageViews: Number(match[2]),
+    engagementMsec: Number(match[3]),
+    engaged: match[4] === "1",
+  };
+}
 
-  let match;
-  if ((match = ua.match(/(?:iPhone|iPad|iPod).*? OS (\d+(?:_\d+)*)/))) {
-    device.operating_system = "iOS";
-    device.operating_system_version = match[1].replace(/_/g, ".");
-  } else if ((match = ua.match(/Android (\d+(?:\.\d+)*)/))) {
-    device.operating_system = "Android";
-    device.operating_system_version = match[1];
-  } else if ((match = ua.match(/Windows NT (\d+\.\d+)/))) {
-    device.operating_system = "Windows";
-    device.operating_system_version = match[1];
-  } else if ((match = ua.match(/Mac OS X (\d+(?:[_.]\d+)*)/))) {
-    device.operating_system = "Macintosh";
-    device.operating_system_version = match[1].replace(/_/g, ".");
-  } else if (/CrOS/.test(ua)) {
-    device.operating_system = "Chrome OS";
-  } else if (/Linux/.test(ua)) {
-    device.operating_system = "Linux";
-  }
+/**
+ * Zeroes the host part of an IP: IPv4 -> /24, IPv6 -> /48. Returns null for anything unparseable.
+ */
+export function truncateIp(ip) {
+  if (typeof ip !== "string") return null;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return ip.replace(/\.\d+$/, ".0");
+  if (!ip.includes(":")) return null;
+  const [head, tail, extra] = ip.toLowerCase().split("::");
+  if (extra !== undefined) return null;
+  const front = head ? head.split(":") : [];
+  const back = tail ? tail.split(":") : [];
+  const fill = tail === undefined ? 0 : 8 - front.length - back.length;
+  if (fill < 0) return null;
+  const groups = [...front, ...Array(fill).fill("0"), ...back];
+  if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
+  return `${groups.slice(0, 3).join(":")}::`;
+}
 
-  const browsers = [
-    ["Edge", /Edg(?:e|A|iOS)?\/([\d.]+)/],
-    ["Opera", /OPR\/([\d.]+)/],
-    ["Samsung Internet", /SamsungBrowser\/([\d.]+)/],
-    ["Firefox", /(?:Firefox|FxiOS)\/([\d.]+)/],
-    ["Chrome", /(?:Chrome|CriOS)\/([\d.]+)/],
-    ["Safari", /Version\/([\d.]+).*Safari/],
-  ];
-  for (const [name, re] of browsers) {
-    if ((match = ua.match(re))) {
-      device.browser = name;
-      device.browser_version = match[1];
-      break;
-    }
-  }
-
+function primaryLanguage(acceptLanguage) {
   const language = (acceptLanguage || "").split(",")[0].split(";")[0].trim();
-  if (/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(language)) device.language = language;
-
-  return device;
+  return /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})?$/.test(language) ? language.toLowerCase() : undefined;
 }
 
 /**
- * Sends the payload to GA4 Measurement Protocol (or the debug endpoint).
+ * Sends one hit to GA4 /g/collect. The visitor's User-Agent is forwarded so GA4 can
+ * derive device category, browser and operating system.
  */
-async function sendToGA(payload, env) {
-  const debug = env.GA_DEBUG === "true";
-  const endpoint = debug
-    ? "https://www.google-analytics.com/debug/mp/collect"
-    : "https://www.google-analytics.com/mp/collect";
-  const url =
-    `${endpoint}?measurement_id=${encodeURIComponent(env.GA_MEASUREMENT_ID)}` +
-    `&api_secret=${encodeURIComponent(env.GA_API_SECRET)}`;
-
+async function sendToGA(hit, userAgent, env) {
+  const headers = userAgent ? { "User-Agent": userAgent } : {};
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (debug) {
-      console.log("GA4 MP debug:", res.status, await res.text());
+    const res = await fetch(`${GA_ENDPOINT}?${hit}`, { method: "POST", headers });
+    if (env.GA_DEBUG === "true") {
+      console.log("GA4 collect:", res.status, hit.get("en"));
     } else if (!res.ok) {
-      console.error("GA4 MP error:", res.status);
+      console.error("GA4 collect error:", res.status);
     }
   } catch (err) {
-    console.error("GA4 MP fetch failed:", err && err.message);
+    console.error("GA4 collect fetch failed:", err && err.message);
   }
 }
 
@@ -358,53 +358,90 @@ async function handleCollect(request, env, ctx, config) {
   const params = sanitizeParams(body.params);
   if (!params) return jsonResponse({ error: "Invalid params" }, 400);
 
-  // Identifiers
-  let clientId = cookies[config.clientCookie];
-  if (!clientId || !UUID_RE.test(clientId)) clientId = crypto.randomUUID();
+  const client = parseClient(cookies[config.clientCookie]);
+  const session = parseSession(cookies[config.sessionCookie]);
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  let sessionId = cookies[config.sessionCookie];
-  if (!sessionId || !/^\d{10}$/.test(sessionId)) sessionId = String(nowSeconds);
+  // user_engagement only closes out a page of a running session; it never starts one.
+  if (eventName === "user_engagement" && (!client || !session)) return noContent();
 
-  const engagement = Number(body.engagement_time_msec);
-  const engagementMsec = Number.isFinite(engagement)
-    ? Math.min(Math.max(Math.round(engagement), 1), MAX_ENGAGEMENT_MSEC)
-    : 1;
-
-  const eventParams = {
-    ...params,
-    page_location: pageLocation,
-    session_id: sessionId,
-    engagement_time_msec: engagementMsec,
+  // Identifiers and session state
+  const clientId = client ? client.id : crypto.randomUUID();
+  const state = session || {
+    id: String(Math.floor(Date.now() / 1000)),
+    pageViews: 0,
+    engagementMsec: 0,
+    engaged: false,
   };
+  const sessionCount = Math.max((client ? client.sessionCount : 0) + (session ? 0 : 1), 1);
+
+  const engagementMsec = clampInt(body.engagement_time_msec, 0, MAX_ENGAGEMENT_MSEC, 0);
+  if (eventName === "page_view") state.pageViews = Math.min(state.pageViews + 1, MAX_PAGE_VIEWS);
+  state.engagementMsec = Math.min(state.engagementMsec + engagementMsec, MAX_ENGAGEMENT_MSEC);
+  if (state.pageViews >= 2 || state.engagementMsec >= ENGAGED_MSEC || config.keyEvents.has(eventName)) {
+    state.engaged = true;
+  }
+
+  const ip = config.truncateIp ? truncateIp(request.headers.get("CF-Connecting-IP")) : null;
+  const hit = new URLSearchParams({
+    v: "2",
+    tid: env.GA_MEASUREMENT_ID || "",
+    cid: clientId,
+    sid: state.id,
+    sct: String(sessionCount),
+    seg: state.engaged ? "1" : "0",
+    _p: state.id,
+    en: eventName,
+    dl: pageLocation,
+    _uip: ip || "0.0.0.0",
+  });
+  if (!client) hit.set("_fv", "1");
+  if (!session) {
+    hit.set("_ss", "1");
+    hit.set("_nsi", "1");
+  }
+
+  const hitSequence = clampInt(body.hit_sequence, 1, MAX_HIT_SEQUENCE, undefined);
+  if (hitSequence !== undefined) hit.set("_s", String(hitSequence));
+  if (engagementMsec > 0) hit.set("_et", String(engagementMsec));
+
   if (typeof body.page_title === "string" && body.page_title) {
-    eventParams.page_title = body.page_title.slice(0, MAX_TITLE_LENGTH);
+    hit.set("dt", body.page_title.slice(0, MAX_TITLE_LENGTH));
   }
   const referrer = anyUrl(body.page_referrer);
-  if (referrer) eventParams.page_referrer = referrer;
-
-  const device = deviceInfo(request.headers.get("User-Agent"), request.headers.get("Accept-Language"));
-  if (device.language) eventParams.language = device.language.toLowerCase();
-
-  const payload = {
-    client_id: clientId,
-    timestamp_micros: Date.now() * 1000,
-    ip_override: "0.0.0.0",
-    device,
-    events: [{ name: eventName, params: eventParams }],
-  };
-  const location = userLocation(request.cf);
-  if (location) payload.user_location = location;
-
-  if (env.GA_MEASUREMENT_ID && env.GA_API_SECRET) {
-    ctx.waitUntil(sendToGA(payload, env));
-  } else {
-    console.warn("GA_MEASUREMENT_ID / GA_API_SECRET not configured; event not forwarded");
+  if (referrer) {
+    hit.set("dr", referrer);
+    // Internal navigation keeps page_referrer but must not become a "referral" traffic source.
+    if (new URL(referrer).origin === origin) hit.set("ir", "1");
   }
 
+  const language = primaryLanguage(request.headers.get("Accept-Language"));
+  if (language) hit.set("ul", language);
+  if (typeof body.screen_resolution === "string" && SCREEN_RE.test(body.screen_resolution)) {
+    hit.set("sr", body.screen_resolution);
+  }
+
+  // Custom event params: ep.* for text, epn.* for numbers (as gtag.js sends them).
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === "number") hit.set(`epn.${key}`, String(value));
+    else hit.set(`ep.${key}`, String(value));
+  }
+
+  if (env.GA_DEBUG === "true") {
+    hit.set("_dbg", "1");
+    hit.set("ep.debug_mode", "true");
+  }
+
+  if (env.GA_MEASUREMENT_ID) {
+    ctx.waitUntil(sendToGA(hit, request.headers.get("User-Agent"), env));
+  } else {
+    console.warn("GA_MEASUREMENT_ID not configured; event not forwarded");
+  }
+
+  const cidValue = `${clientId}.${sessionCount}`;
+  const sidValue = `${state.id}.${state.pageViews}.${state.engagementMsec}.${state.engaged ? 1 : 0}`;
   const headers = new Headers();
-  headers.append("Set-Cookie", `${config.clientCookie}=${clientId}; Max-Age=${CID_MAX_AGE}; ${COOKIE_ATTRS}`);
-  headers.append("Set-Cookie", `${config.sessionCookie}=${sessionId}; Max-Age=${config.sessionTimeout}; ${COOKIE_ATTRS}`);
+  headers.append("Set-Cookie", `${config.clientCookie}=${cidValue}; Max-Age=${CID_MAX_AGE}; ${COOKIE_ATTRS}`);
+  headers.append("Set-Cookie", `${config.sessionCookie}=${sidValue}; Max-Age=${config.sessionTimeout}; ${COOKIE_ATTRS}`);
   return noContent(headers);
 }
 

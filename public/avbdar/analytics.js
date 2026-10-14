@@ -4,8 +4,10 @@
  * Released under the MIT License
  *
  * No Google script in the browser: events are POSTed to your own Worker endpoint, which sets an
- * HttpOnly first-party cookie and forwards the data to GA4 Measurement Protocol.
+ * HttpOnly first-party cookie and forwards the data to GA4 (the same /g/collect endpoint gtag.js uses).
  * The Worker re-checks consent server-side from the consent cookie.
+ * Engagement time is measured like gtag.js (only while the page is visible) and sent as
+ * user_engagement when the page is hidden or left.
  *
  * Usage:
  *   <script defer src="/avbdar/analytics.js"></script>
@@ -39,8 +41,28 @@
         .map(function (s) { return s.trim(); })
         .filter(Boolean);
 
-    var startedAt = Date.now();
+    var MIN_ENGAGEMENT_MSEC = 1000;
+
     var pageViewSent = false;
+    var hitSequence = 0;
+    // Visible time not yet reported to GA4 (gtag.js-style engagement)
+    var engagedMs = 0;
+    var visibleSince = document.visibilityState === 'visible' ? Date.now() : null;
+
+    function pauseEngagement() {
+        if (visibleSince === null) return;
+        engagedMs += Date.now() - visibleSince;
+        visibleSince = null;
+    }
+
+    function takeEngagement() {
+        var wasVisible = visibleSince !== null;
+        pauseEngagement();
+        if (wasVisible) visibleSince = Date.now();
+        var ms = engagedMs;
+        engagedMs = 0;
+        return ms;
+    }
 
     function readCookie(name) {
         var parts = document.cookie ? document.cookie.split(';') : [];
@@ -79,7 +101,9 @@
                 page_location: window.location.href,
                 page_title: document.title,
                 page_referrer: document.referrer || undefined,
-                engagement_time_msec: Math.max(1, Date.now() - startedAt),
+                engagement_time_msec: takeEngagement(),
+                hit_sequence: ++hitSequence,
+                screen_resolution: window.screen ? window.screen.width + 'x' + window.screen.height : undefined,
                 params: params || {}
             })
         }).catch(function () { /* analytics must never break the page */ });
@@ -88,7 +112,14 @@
     function pageView() {
         if (pageViewSent || !hasAnalyticsConsent()) return;
         pageViewSent = true;
+        takeEngagement(); // time before the page_view (e.g. waiting for consent) is not counted
         trackEvent('page_view');
+    }
+
+    // Page hidden or left: report the accumulated visible time (gtag.js user_engagement)
+    function flushEngagement() {
+        pauseEngagement();
+        if (pageViewSent && engagedMs >= MIN_ENGAGEMENT_MSEC) trackEvent('user_engagement');
     }
 
     function forget() {
@@ -117,6 +148,16 @@
     }
 
     eraseLegacyCookies();
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') {
+            if (visibleSince === null) visibleSince = Date.now();
+        } else {
+            flushEngagement();
+        }
+    });
+    // Safari does not always fire visibilitychange when the page is left
+    window.addEventListener('pagehide', flushEngagement);
 
     window.avAnalytics = {
         trackEvent: trackEvent,

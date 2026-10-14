@@ -17,7 +17,9 @@
     "DOMAIN": "example.com",
     "GA_MEASUREMENT_ID": "G-XXXXXXXXXX"
     // Optional:
+    // "IP_MODE": "none",              // or "truncated" (IPv4 /24, IPv6 /48) to keep country and city
     // "ALLOWED_EVENTS": "page_view,generate_lead,click_cta,file_download",
+    // "KEY_EVENTS": "generate_lead",
     // "METRICS_PATH": "/api/metrics",
     // "CONSENT_COOKIE": "cc_cookie",
     // "CONSENT_CATEGORY": "analytics",
@@ -25,5 +27,4 @@
     // "SESSION_COOKIE": "__av_sid",
     // "SESSION_TIMEOUT": "1800"
   }
-  // Secret (never in vars): npx wrangler secret put GA_API_SECRET
 }
